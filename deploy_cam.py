@@ -16,9 +16,10 @@ import draccus
 from sam2.build_sam import build_sam2_camera_predictor
 import json_numpy
 import cv2
+import warnings
+warnings.filterwarnings("ignore")
 
 json_numpy.patch()
-np.random.seed(3)
 
 torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 if torch.cuda.get_device_properties(0).major >= 8:
@@ -36,50 +37,32 @@ predictor = build_sam2_camera_predictor(model_cfg, sam2_checkpoint, device=devic
 
 # === Server Interface ===
 class SAM2_Server:
-    def __init__(self):
-        pass
+    def __init__(self, predictor):
+        self.predictor = predictor
 
     def predict_mask(self, payload: Dict[str, Any]) -> str:
         try:
-            # Parse payload components
-
             frame = np.array(Image.fromarray(payload["image"]).convert("RGB"))
-            boxes = torch.tensor(payload["input_box"]).to(device)
+            points = payload["points"]
+            labels = payload["labels"]
+            ann_obj_id = payload["obj_ids"]
             if_init = payload["if_init"]
             
             if if_init:
-                predictor.load_first_frame(frame)
+                self.predictor.load_first_frame(frame)
             
                 ann_frame_idx = 0  # the frame index we interact with
-                ann_obj_id = 2  # give a unique id to each object we interact with (it can be any integers)
                 
-                if boxes.shape[0] != 0:
-                    _, out_obj_ids, out_mask_logits = predictor.add_new_prompt(
-                        frame_idx=ann_frame_idx,
-                        obj_id=ann_obj_id,
-                        bbox=boxes,
+                for i in range(len(points)):
+                    _, out_obj_ids, out_mask_logits = self.predictor.add_new_prompt(
+                        frame_idx=ann_frame_idx, obj_id=ann_obj_id[i], points=[points[i]], labels=[labels[i]], clear_old_points=False
                     )
-
-                result = {"state":"initialized"}
-
-                return JSONResponse(result)
+                result = {"obj_ids":np.array(out_obj_ids),"masks":out_mask_logits.cpu().numpy()}
 
             else:
-                out_obj_ids, out_mask_logits = predictor.track(frame)
-                width, height = frame.shape[:2][::-1]
-                all_mask = np.zeros((height, width, 1), dtype=np.uint8)
-                # print(all_mask.shape)
-                for i in range(0, len(out_obj_ids)):
-                    out_mask = (out_mask_logits[i] > 0.0).permute(1, 2, 0).cpu().numpy().astype(
-                        np.uint8
-                    ) * 255
+                out_obj_ids, out_mask_logits = self.predictor.track(frame)
 
-                    all_mask = cv2.bitwise_or(all_mask, out_mask)
-
-                all_mask = cv2.cvtColor(all_mask, cv2.COLOR_GRAY2RGB)
-                frame = cv2.addWeighted(frame, 1, all_mask, 0.5, 0)
-
-            result = {"masks":np.array(all_mask),"scores":out_mask_logits.cpu().numpy(),"frame":np.array(frame)}
+                result = {"obj_ids":np.array(out_obj_ids),"masks":out_mask_logits.cpu().numpy()}
 
             return JSONResponse(result)
         
@@ -96,13 +79,13 @@ class SAM2_Server:
 @dataclass
 class DeployConfig:
     # Server Configuration
-    host: str = "10.129.152.163"                                         # Host IP Address
+    host: str = "10.129.149.177"                                         # Host IP Address
     port: int = 8006                                                    # Host Port
 
 
 @draccus.wrap()
 def deploy(cfg: DeployConfig) -> None:
-    server = SAM2_Server()
+    server = SAM2_Server(predictor)
     server.run(cfg.host, port=cfg.port)
 
 if __name__ == "__main__":

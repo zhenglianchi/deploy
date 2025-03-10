@@ -144,6 +144,7 @@ class SAM2CameraPredictor(SAM2Base):
     def _obj_id_to_idx(self, obj_id):
         """Map client-side object id to model-side object index."""
         obj_idx = self.condition_state["obj_id_to_idx"].get(obj_id, None)
+
         if obj_idx is not None:
             return obj_idx
 
@@ -193,7 +194,7 @@ class SAM2CameraPredictor(SAM2Base):
         points=None,
         labels=None,
         bbox=None,
-        clear_old_points=True,
+        clear_old_points=False,
         normalize_coords=True,
     ):
         """Add new points to a frame."""
